@@ -7,15 +7,25 @@ export const useAuth = ({ middleware, redirectIfAuthenticated } = {}) => {
     const router = useRouter()
     const params = useParams()
 
-    const { data: user, error, mutate } = useSWR('/api/user', () =>
-        axios
-            .get('/api/user')
-            .then(res => res.data)
-            .catch(error => {
-                if (error.response.status !== 409) throw error
+    // SWR config: the session check may legitimately return 401 for guests.
+    // Don't retry errors, and don't refetch on focus/reconnect repeatedly —
+    // otherwise the browser console fills with the same 401 over and over.
+    const { data: user, error, mutate } = useSWR(
+        '/api/user',
+        () =>
+            axios
+                .get('/api/user')
+                .then(res => res.data)
+                .catch(error => {
+                    if (error.response.status !== 409) throw error
 
-                router.push('/verify-email')
-            }),
+                    router.push('/verify-email')
+                }),
+        {
+            revalidateOnFocus: false,
+            revalidateOnReconnect: false,
+            shouldRetryOnError: false,
+        },
     )
 
     const csrf = () => axios.get('/sanctum/csrf-cookie')
@@ -111,7 +121,16 @@ export const useAuth = ({ middleware, redirectIfAuthenticated } = {}) => {
             user?.email_verified_at
         )
             router.push(redirectIfAuthenticated)
-        if (middleware === 'auth' && error) logout()
+        if (middleware === 'auth' && error) {
+            if (error.response?.status === 401) {
+                // Unauthenticated is an expected state (e.g. session expired),
+                // just redirect to login instead of calling /logout which
+                // would itself fail with 401.
+                window.location.pathname = '/login'
+                return
+            }
+            logout()
+        }
     }, [user, error])
 
     return {
